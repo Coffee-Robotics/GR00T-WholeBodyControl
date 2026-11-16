@@ -101,6 +101,7 @@
 // Robot parameters
 #include "../include/robot_parameters.hpp"
 #include "../include/policy_parameters.hpp"
+#include "../include/start_blend.hpp"
 
 // Input interface and input handlers
 #include "../include/input_interface/keyboard_handler.hpp"
@@ -295,6 +296,7 @@ class G1Deploy {
     static constexpr std::chrono::milliseconds LOW_STATE_LATE_THRESHOLD{50};
     static constexpr std::chrono::milliseconds LOW_STATE_ABSENT_THRESHOLD{500};
     ProgramState program_state_;
+    StartBlend<G1_NUM_MOTOR> start_blend_;  ///< Eases joint targets from the held pose into the policy's after start.
     std::array<double, G1_NUM_MOTOR> last_action;
     std::array<double, 7> last_left_hand_action;
     std::array<double, 7> last_right_hand_action;
@@ -2159,7 +2161,8 @@ class G1Deploy {
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
-      double initial_max_close_ratio = 1.0)
+      double initial_max_close_ratio = 1.0,
+      double start_blend_time = 0.0)
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2171,6 +2174,7 @@ class G1Deploy {
         mode_machine_(0),
         disable_crc_check_(disable_crc_check),
         program_state_(ProgramState::INIT),
+        start_blend_(start_blend_time),
         last_action {0.0},
         last_left_hand_action {0.0},
         last_right_hand_action {0.0},
@@ -2180,6 +2184,11 @@ class G1Deploy {
         //env(ORT_LOGGING_LEVEL_WARNING, "G1Deploy"),
         model_path(model_file_path),
         planner_path(planner_file_path) {
+
+      if (start_blend_.Duration() > 0.0) {
+        std::cout << "[INFO] Start blend: joint targets ease from the held pose into the policy's over "
+                  << start_blend_.Duration() << " s after control starts" << std::endl;
+      }
       
       // Initialize ChannelFactory
       ChannelFactory::Instance()->Init(0, networkInterface);
@@ -3128,6 +3137,9 @@ class G1Deploy {
         motor_command_tmp.kd.at(i) = kds[i];
         motor_command_tmp.dq_target.at(i) = 0.0;
       }
+      // For a moment after control starts, ease from the targets that were
+      // being held into the policy's, so the joints are not stepped.
+      start_blend_.Apply(control_dt_, motor_command_tmp.q_target);
       motor_command_buffer_.SetData(motor_command_tmp);
       return true;
     }
@@ -3832,6 +3844,10 @@ class G1Deploy {
               warn_count++;
             }
             std::cout << "[Control] DEBUG: operator_state.start=true, transitioning to CONTROL state" << std::endl;
+            // The policy's first targets are blended in from the ones held until now.
+            if (const std::shared_ptr<const MotorCommand> held = motor_command_buffer_.GetDataWithTime().data) {
+              start_blend_.Begin(held->q_target);
+            }
             program_state_ = ProgramState::CONTROL;
           }
           break;
@@ -4137,6 +4153,8 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --max-close-ratio <value>: set initial hand max close ratio (0.2-1.0; default: 1.0 = full closure)" << std::endl;
     std::cout << "                             0.2 = limited (80% open), 1.0 = full closure allowed" << std::endl;
     std::cout << "                             Keyboard controls: x/c = +/- 0.1 (always available)" << std::endl;
+    std::cout << "  --start-blend-time <seconds>: ease joint targets from the held pose into the policy's over this" << std::endl;
+    std::cout << "                                long after control starts (0-10; default: 0 = switch at once)" << std::endl;
     std::cout << "\nExamples:" << std::endl;
     std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --planner-file policy/planner.onnx --obs-config policy/single_frame/observation_config.yaml --disable-crc-check" << std::endl;
     std::cout << "  " << argv[0] << " enp5s0 policy/token/model.onnx reference/bones_072925_test/ --obs-config policy/token/observation_config.yaml --encoder-file policy/token/encoder.onnx" << std::endl;
@@ -4180,6 +4198,7 @@ int main(int argc, char const* argv[]) {
   std::string zmq_out_topic = "g1_debug";
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
+  double start_blend_time = 0.0; // default switches to the policy's targets at once, use --start-blend-time to ease in
   for (int i = 4; i < argc; i++) {
     if (std::string(argv[i]) == "--disable-crc-check") {
       disableCrcCheck = true;
@@ -4409,6 +4428,24 @@ int main(int argc, char const* argv[]) {
         std::cerr << "Error: --max-close-ratio requires a value argument" << std::endl;
         exit(1);
       }
+    } else if (std::string(argv[i]) == "--start-blend-time") {
+      if (i + 1 < argc) {
+        try {
+          start_blend_time = std::stod(argv[i + 1]);
+        } catch (...) {
+          std::cerr << "Error: Invalid start blend time value: " << argv[i + 1] << std::endl;
+          exit(1);
+        }
+        // Validate range [0, 10]; the negated form also rejects NaN
+        if (!(start_blend_time >= 0.0 && start_blend_time <= 10.0)) {
+          std::cerr << "Error: --start-blend-time must be between 0 and 10 seconds" << std::endl;
+          exit(1);
+        }
+        i++; // Skip the next argument since it's the time value
+      } else {
+        std::cerr << "Error: --start-blend-time requires a value argument" << std::endl;
+        exit(1);
+      }
     }
   }
 
@@ -4441,7 +4478,8 @@ int main(int argc, char const* argv[]) {
     zmq_out_topic,
     enableMotionRecording,
     initial_compliance,
-    initial_max_close_ratio
+    initial_max_close_ratio,
+    start_blend_time
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   

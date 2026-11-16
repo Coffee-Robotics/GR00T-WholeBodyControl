@@ -108,6 +108,9 @@ just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx reference/examp
 **Simulation:**
 - `--disable-crc-check`: Disable CRC validation (required for MuJoCo simulation)
 
+**Control start:**
+- `--start-blend-time <seconds>`: Ease the joint targets from the pose held while waiting into the policy's targets over this long after control starts (0–10; default: `0` = switch at once). Without it every joint target steps to the policy's first output in a single control tick, which the robot takes as a jolt. Start with the robot supported: the policy's corrections are only partly applied until the blend is over.
+
 **Hand & Compliance Control:**
 - `--set-compliance <value>`: Set initial VR 3-point compliance (0.01 = rigid, 0.5 = compliant; default: `0.5,0.5,0.0`). Can specify 1 value (applied to both hands) or 3 comma-separated values (`left_wrist,right_wrist,head`). Runtime keyboard controls: `g/h` = left hand ±0.1, `b/v` = right hand ±0.1.
 - `--max-close-ratio <value>`: Set initial hand max close ratio (0.2–1.0; default: 1.0 = full closure allowed). Runtime keyboard controls: `x/c` = ±0.1.
