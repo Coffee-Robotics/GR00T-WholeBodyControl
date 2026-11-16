@@ -213,6 +213,7 @@ show_usage() {
     echo "  --zmq-host HOST         Set the ZMQ host (default: localhost)"
     echo "  --motor-kp-scale SPEC   Scale Kp for hardware motor indices/ranges"
     echo "  --motor-kd-scale SPEC   Scale Kd for hardware motor indices/ranges"
+    echo "  --start-blend-time SEC  Ease joint targets into the policy's over SEC seconds after control starts (default: 0 = off)"
     echo ""
     echo "Interface modes:"
     echo "  sim              Use loopback interface for simulation (MuJoCo)"
@@ -255,6 +256,7 @@ OUTPUT_TYPE="$OUTPUT_TYPE_DEFAULT"
 ZMQ_HOST="$ZMQ_HOST_DEFAULT"
 MOTOR_KP_SCALES=()
 MOTOR_KD_SCALES=()
+START_BLEND_TIME=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -335,6 +337,14 @@ while [[ $# -gt 0 ]]; do
             MOTOR_KD_SCALES+=("$2")
             shift 2
             ;;
+        --start-blend-time)
+            if [[ -z "$2" ]]; then
+                echo -e "${RED}Error: --start-blend-time requires a number of seconds${NC}" >&2
+                exit 1
+            fi
+            START_BLEND_TIME="$2"
+            shift 2
+            ;;
         sim|real)
             INTERFACE_MODE="$1"
             shift
@@ -412,6 +422,9 @@ done
 for scale in "${MOTOR_KD_SCALES[@]}"; do
     EXTRA_ARGS+=("--motor-kd-scale" "$scale")
 done
+if [[ -n "$START_BLEND_TIME" ]]; then
+    EXTRA_ARGS+=("--start-blend-time" "$START_BLEND_TIME")
+fi
 
 # ============================================================================
 # Step 1: Check Prerequisites
