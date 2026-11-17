@@ -30,7 +30,10 @@ class G1Env(HumanoidEnv):
 
         # Initialize safety monitor (visualization disabled)
         self.safety_monitor = JointSafetyMonitor(
-            robot_model, enable_viz=False, env_type=self.config.get("ENV_TYPE", "real")
+            robot_model,
+            enable_viz=False,
+            env_type=self.config.get("ENV_TYPE", "real"),
+            safety_mode=self.config.get("joint_safety_mode", "kill"),
         )
         self.last_obs = None
         self.last_safety_ok = True  # Track last safety status from queue_action
@@ -218,6 +221,7 @@ class G1Env(HumanoidEnv):
         if self.last_obs is not None:
             safety_result = self.safety_monitor.handle_violations(self.last_obs, action)
             action = safety_result["action"]
+            self.last_safety_ok = safety_result["safe_to_continue"]
 
         # Map action from joint order to actuator order
         body_actuator_q = self.robot_model.get_body_actuated_joints(action["q"])

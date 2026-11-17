@@ -2,6 +2,13 @@
 
 This module implements safety monitoring for arm and finger joint velocities using
 joint groups defined in the robot model's supplemental info. Leg joints are not monitored.
+
+What happens on a velocity violation depends on the safety mode:
+
+- "kill" (default): on the real robot the control loop is shut down.
+- "hold": the monitored joints are held where they are for a short time and then ramped
+  back to the commanded pose. Nothing else is touched, so the lower body policy keeps
+  balancing the robot.
 """
 
 from datetime import datetime
@@ -21,18 +28,36 @@ class JointSafetyMonitor:
     ARM_VELOCITY_LIMIT = 6.0  # rad/s for arm joints
     HAND_VELOCITY_LIMIT = 50.0  # rad/s for finger joints
 
-    def __init__(self, robot_model, enable_viz: bool = False, env_type: str = "real"):
+    # Safety modes: what to do on a velocity violation
+    SAFETY_MODES = ("kill", "hold")
+    HOLD_DURATION = 0.5  # seconds the monitored joints are held for in "hold" mode
+
+    def __init__(
+        self,
+        robot_model,
+        enable_viz: bool = False,
+        env_type: str = "real",
+        safety_mode: str = "kill",
+    ):
         """Initialize joint safety monitor.
 
         Args:
             robot_model: The robot model containing joint information
             enable_viz: If True, enable rerun visualization (default False)
             env_type: Environment type - "sim" or "real" (default "real")
+            safety_mode: What to do on a velocity violation - "kill" shuts the control loop
+                down (real robot only), "hold" holds the monitored joints and ramps them
+                back while the rest of the robot keeps running (default "kill")
         """
+        if safety_mode not in self.SAFETY_MODES:
+            raise ValueError(
+                f"Invalid safety_mode: {safety_mode}, please use one of: {self.SAFETY_MODES}"
+            )
         self.robot_model = robot_model
         self.safety_margin = 1.0  # Hardcoded safety margin
         self.enable_viz = enable_viz
         self.env_type = env_type
+        self.safety_mode = safety_mode
 
         # Startup ramping parameters
         self.control_frequency = 50  # Hz, hardcoded from run_g1_control_loop.py
@@ -40,6 +65,11 @@ class JointSafetyMonitor:
         self.startup_counter = 0
         self.initial_positions = None
         self.startup_complete = False
+
+        # Hold parameters ("hold" mode)
+        self.hold_duration_steps = int(self.HOLD_DURATION * self.control_frequency)
+        self.hold_counter = 0
+        self.hold_positions = None  # joint positions being held, None when not holding
 
         # Initialize velocity and position limits for monitored joints
         self.velocity_limits = {}
@@ -318,6 +348,54 @@ class JointSafetyMonitor:
 
         return safe_action
 
+    def update_hold(self, obs: Dict, velocity_violation: bool) -> bool:
+        """Start, extend or finish holding the monitored joints ("hold" mode).
+
+        A velocity violation starts a hold at the current joint positions, or extends one that
+        is under way. Once HOLD_DURATION has passed without a violation the hold ends and the
+        startup ramp is restarted from the held positions, so the joints return smoothly to
+        the commanded pose.
+
+        Args:
+            obs: Observation dictionary containing current joint positions
+            velocity_violation: Whether a monitored joint exceeds its velocity limit
+
+        Returns:
+            True if a hold was started by this call
+        """
+        started = False
+        if velocity_violation:
+            if self.hold_positions is None and "q" in obs:
+                self.hold_positions = obs["q"].copy()
+                started = True
+            self.hold_counter = self.hold_duration_steps
+        elif self.hold_positions is not None:
+            self.hold_counter -= 1
+            if self.hold_counter <= 0:
+                self.initial_positions = self.hold_positions
+                self.hold_positions = None
+                self.startup_counter = 0
+                self.startup_complete = False
+        return started
+
+    def apply_hold(self, action: Dict) -> Dict:
+        """Replace the monitored joints' targets with the positions being held.
+
+        Args:
+            action: Action dictionary containing target positions
+
+        Returns:
+            The action, with the monitored joints held if a hold is under way
+        """
+        if self.hold_positions is None or "q" not in action:
+            return action
+        for joint_name in self.velocity_limits:
+            if joint_name in self.robot_model.joint_to_dof_index:
+                joint_idx = self.robot_model.joint_to_dof_index[joint_name]
+                if joint_idx < len(action["q"]) and joint_idx < len(self.hold_positions):
+                    action["q"][joint_idx] = self.hold_positions[joint_idx]
+        return action
+
     def get_violation_report(self, violations: Optional[List[Dict]] = None) -> str:
         """Generate a formatted error report for violations.
 
@@ -364,7 +442,12 @@ class JointSafetyMonitor:
                 report += f"EXCEEDED by {exceeded:.1f}%\n"
 
         # Add appropriate action message
-        if critical_violations:
+        if critical_violations and self.safety_mode == "hold":
+            report += (
+                f"Action: Arm and hand targets held for {self.HOLD_DURATION} s, "
+                "then ramped back. The lower body keeps running."
+            )
+        elif critical_violations:
             report += "Action: Safe mode engaged (kp=0, tau=0). System shutdown initiated.\n"
             report += "Please restart Docker container to resume operation."
         else:
@@ -387,8 +470,16 @@ class JointSafetyMonitor:
         """
         is_safe, violations = self.check_safety(obs, action)
 
+        # In "hold" mode, start, extend or finish a hold before the action is made safe
+        hold_started = False
+        if self.safety_mode == "hold":
+            hold_started = self.update_hold(obs, velocity_violation=not is_safe)
+
         # Apply startup ramping (always, regardless of violations)
         safe_action = self.get_safe_action(obs, action)
+
+        # Hold the monitored joints where they are while a hold is under way
+        safe_action = self.apply_hold(safe_action)
 
         # Visualize arm and hand joint positions and velocities if enabled
         if self.enable_viz:
@@ -423,6 +514,16 @@ class JointSafetyMonitor:
                     self.viz.plot_tensors(tensor_dict, time.time())
                 except Exception:
                     pass
+
+        if self.safety_mode == "hold":
+            if hold_started:
+                critical_violations = [v for v in violations if v.get("critical", True)]
+                print(f"[SAFETY VIOLATION] {self.get_violation_report(critical_violations)}")
+            return {
+                "safe_to_continue": self.hold_positions is None,
+                "action": safe_action,
+                "shutdown_required": False,
+            }
 
         if not violations:
             return {"safe_to_continue": True, "action": safe_action, "shutdown_required": False}
