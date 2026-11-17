@@ -60,12 +60,21 @@ def override_wbc_config(
         for key in key_to_value:
             wbc_config[key] = key_to_value[key]
 
-    # g1 kp, kd, sim2real gap
-    if config.env_type == "real":
-        # update waist pitch damping, index 14
-        wbc_config["MOTOR_KD"][14] = wbc_config["MOTOR_KD"][14] - 10
+    _check_motor_gains(wbc_config)
 
     return wbc_config
+
+
+def _check_motor_gains(wbc_config: dict) -> None:
+    """Refuse a negative motor gain.
+
+    A negative stiffness or damping drives a joint away from its target instead
+    of towards it, so it is never what a configuration means to ask for.
+    """
+    for key in ("MOTOR_KP", "MOTOR_KD"):
+        for index, gain in enumerate(wbc_config.get(key, [])):
+            if gain < 0:
+                raise ValueError(f"{key}[{index}] is {gain}: motor gains must not be negative")
 
 
 @dataclass
