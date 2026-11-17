@@ -48,6 +48,7 @@ def override_wbc_config(
         "enable_gravity_compensation": config.enable_gravity_compensation,
         "gravity_compensation_joints": config.gravity_compensation_joints,
         "high_elbow_pose": config.high_elbow_pose,
+        "joint_safety_mode": config.joint_safety_mode,
     }
 
     if missed_keys_only:
@@ -151,6 +152,12 @@ class BaseConfig(ArgsConfigTemplate):
 
     gravity_compensation_joints: Optional[list[str]] = None
     """Joint groups to apply gravity compensation to (e.g., ['arms', 'left_arm', 'right_arm'])."""
+
+    # Joint Safety Configuration
+    joint_safety_mode: Literal["kill", "hold"] = "kill"
+    """What to do when an arm or hand joint exceeds its velocity limit: 'kill' shuts the control
+    loop down (real robot only), 'hold' holds those joints where they are and then ramps them
+    back, while the lower body policy keeps running."""
     # Teleop/Device Configuration
     body_control_device: str = "dummy"
     """Device to use for body control. Options: dummy, vive, iphone, leapmotion, joycon."""
