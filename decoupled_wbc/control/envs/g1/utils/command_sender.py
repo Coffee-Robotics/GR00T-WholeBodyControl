@@ -6,6 +6,8 @@ from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_
 from unitree_sdk2py.utils.crc import CRC
 
+from decoupled_wbc.control.envs.g1.utils.joint_offsets import get_joint_offsets
+
 
 class BodyCommandSender:
     def __init__(self, config: Dict):
@@ -38,6 +40,9 @@ class BodyCommandSender:
             self.robot_kp[i] = self.config["MOTOR_KP"][i] * self.kp_level
         for i in range(len(self.config["MOTOR_KD"])):
             self.robot_kd[i] = self.config["MOTOR_KD"][i] * 1.0
+        # Subtracted from the commanded joint positions: a joint is at its encoder reading plus
+        # its offset, so the motor is sent the encoder reading that puts the joint where asked
+        self.joint_offsets = get_joint_offsets(self.config)
         self.weak_motor_joint_index = []
         for _, value in self.config["WeakMotorJointIndex"].items():
             self.weak_motor_joint_index.append(value)
@@ -94,7 +99,9 @@ class BodyCommandSender:
                 self.low_cmd.motor_cmd[motor_index].dq = 0.0
                 self.low_cmd.motor_cmd[motor_index].tau = 0.0
             else:
-                self.low_cmd.motor_cmd[motor_index].q = cmd_q[joint_index]
+                self.low_cmd.motor_cmd[motor_index].q = (
+                    cmd_q[joint_index] - self.joint_offsets[joint_index]
+                )
                 self.low_cmd.motor_cmd[motor_index].dq = cmd_dq[joint_index]
                 self.low_cmd.motor_cmd[motor_index].tau = cmd_tau[joint_index]
             # kp kd
