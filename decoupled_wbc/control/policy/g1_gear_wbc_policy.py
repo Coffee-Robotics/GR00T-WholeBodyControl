@@ -167,10 +167,13 @@ class G1GearWbcPolicy(Policy):
         assert self.obs_tensor.shape[1] == self.config["num_obs"]
 
     def set_use_teleop_policy_cmd(self, use_teleop_policy_cmd: bool):
+        # Safety: When teleop is disabled, reset navigation to stop. get_action() only
+        # updates self.cmd while teleop commands are in use, so without this the policy
+        # keeps walking at the last teleop velocity. Keyboard commands are left alone:
+        # the reset happens only on the change from teleop to no teleop.
+        if self.use_teleop_policy_cmd and not use_teleop_policy_cmd:
+            self.cmd = self.config["cmd_init"].copy()  # Reset to safe default
         self.use_teleop_policy_cmd = use_teleop_policy_cmd
-        # Safety: When teleop is disabled, reset navigation to stop
-        if not use_teleop_policy_cmd:
-            self.nav_cmd = self.config["cmd_init"].copy()  # Reset to safe default
 
     def set_goal(self, goal: Dict[str, Any]):
         """Set the goal for the policy.
