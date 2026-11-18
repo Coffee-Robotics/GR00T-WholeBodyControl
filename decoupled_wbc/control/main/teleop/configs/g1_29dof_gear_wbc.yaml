@@ -151,6 +151,17 @@ WeakMotorJointIndex:
 
 NUM_MOTORS: 29
 NUM_JOINTS: 29
+
+# Joint position offsets in radians, in joint order: a joint is at its encoder reading plus its
+# offset. Added to the measured joint positions and subtracted from the commanded ones. Use them
+# to calibrate out an encoder zero error, or give in a linkage or a sole under load.
+JOINT_OFFSETS: [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+]
 NUM_HAND_MOTORS: 7
 NUM_HAND_JOINTS: 7
 NUM_UPPER_BODY_JOINTS: 17

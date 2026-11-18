@@ -13,6 +13,8 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (
     OdoState_,
 )
 
+from decoupled_wbc.control.envs.g1.utils.joint_offsets import get_joint_offsets
+
 
 class BodyStateProcessor:
     def __init__(self, config):
@@ -55,6 +57,8 @@ class BodyStateProcessor:
             raise NotImplementedError(f"Robot type {self.config['ROBOT_TYPE']} is not supported")
 
         self.num_dof = self.config["NUM_JOINTS"]
+        # Added to the measured joint positions: a joint is at its encoder reading plus its offset
+        self.joint_offsets = get_joint_offsets(self.config)
         # 3 + 4 + 19
         self._init_q = np.zeros(3 + 4 + self.num_dof)
         self.q = self._init_q
@@ -95,7 +99,9 @@ class BodyStateProcessor:
         self.torso_ang_vel = self.secondary_imu_state.gyroscope
 
         for i in range(self.num_dof):
-            self.q[7 + i] = unitree_joint_state[self.config["JOINT2MOTOR"][i]].q
+            self.q[7 + i] = (
+                unitree_joint_state[self.config["JOINT2MOTOR"][i]].q + self.joint_offsets[i]
+            )
             self.dq[6 + i] = unitree_joint_state[self.config["JOINT2MOTOR"][i]].dq
             self.tau_est[6 + i] = unitree_joint_state[self.config["JOINT2MOTOR"][i]].tau_est
 
